@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 #===============================================================================
 # MAGIC-VPN 5.0 – by MAGIC-MAN (Le Dieu du Net)
-# Gabon Flag Edition | Full Menu Loop | Host/SNI Changer | Auto-Update
+# Gabon Flag Edition | Classic Menu (9 options) | Améliorations internes
 #===============================================================================
 
 GREEN='\e[42m\e[30m'
@@ -16,8 +16,7 @@ MAGENTA='\e[35m'
 
 MAGIC_DIR="$HOME/.magicvpn"
 LOG="$MAGIC_DIR/magic.log"
-CONFIG_DIR="$MAGIC_DIR/configs"
-mkdir -p "$MAGIC_DIR" "$CONFIG_DIR"
+mkdir -p "$MAGIC_DIR"
 
 VERSION="5.0"
 UPDATE_URL="https://raw.githubusercontent.com/magic-man241/magic-vpn/main/magic.sh"
@@ -58,7 +57,7 @@ auth() {
 install_deps() {
     log "Vérification dépendances..."
     pkg update -y -qq && pkg upgrade -y -qq
-    for p in jq curl; do
+    for p in jq curl nmap; do
         command -v $p &>/dev/null || pkg install -y $p
     done
     if ! command -v speedtest-cli &>/dev/null; then
@@ -67,67 +66,73 @@ install_deps() {
     log "Dépendances OK."
 }
 
-optimize() {
-    log "Stabilisation VPN (keepalive + DNS)"
-    echo -e "${CYAN}[*] Optimisations non-root appliquées...${RESET}"
-    echo "nameserver 1.1.1.1" > /data/data/com.termux/files/usr/etc/resolv.conf 2>/dev/null
-    echo -e "${YELLOW}Keepalive : ping toutes les 5s (Ctrl+C pour arrêter).${RESET}"
-    ping -i 5 8.8.8.8
-    echo -e "${GREEN}[✔] Optimisations terminées. Retour au menu...${RESET}"
-    sleep 1
+# ========== OPTION 1 : STABILISER & OPTIMISER (root) ==========
+optimize_root() {
+    log "Stabilisation (root si possible)..."
+    if su -c "echo root" 2>/dev/null; then
+        echo -e "${CYAN}[*] Root détecté, application des tweaks...${RESET}"
+        su -c "sysctl -w net.ipv4.tcp_congestion_control=bbr" &>/dev/null
+        su -c "sysctl -w net.ipv4.tcp_fastopen=3" &>/dev/null
+        su -c "sysctl -w net.ipv4.tcp_rmem='4096 87380 33554432'" &>/dev/null
+        su -c "sysctl -w net.ipv4.tcp_wmem='4096 65536 33554432'" &>/dev/null
+        su -c "iptables -t mangle -F; iptables -t mangle -A OUTPUT -p tcp --dport 443 -j TOS --set-tos Maximize-Throughput" &>/dev/null
+        echo -e "${GREEN}[✔] Optimisations root appliquées.${RESET}"
+    else
+        echo -e "${YELLOW}[!] Root non disponible. Application des optimisations de base...${RESET}"
+        echo "nameserver 1.1.1.1" > /data/data/com.termux/files/usr/etc/resolv.conf 2>/dev/null
+        echo -e "${CYAN} Keepalive : ping toutes les 5s (Ctrl+C pour arrêter).${RESET}"
+        ping -i 5 8.8.8.8
+    fi
+    echo -e "${CYAN}Appuyez sur Entrée pour revenir au menu...${RESET}"
+    read
 }
 
-detect_vpn() {
-    local config="$1"
-    if echo "$config" | grep -qiE '^(vmess|vless|trojan|ss|ssr)://'; then
-        proto=$(echo "$config" | grep -oEi '^(vmess|vless|trojan|ss|ssr)' | tr '[:upper:]' '[:lower:]')
-        echo "$proto"
-        return
+# ========== OPTION 2 : SCANNER DES PORTS ==========
+scan_ports() {
+    if ! command -v nmap &>/dev/null; then
+        pkg install -y nmap
     fi
-    if echo "$config" | jq -e .outbounds >/dev/null 2>&1; then
-        proto=$(echo "$config" | jq -r '.outbounds[0].protocol // empty' 2>/dev/null)
-        [ -n "$proto" ] && echo "v2ray-$proto" && return
-    fi
-    if echo "$config" | grep -qiE '^mode='; then
-        echo "httpcustom"; return
-    fi
-    if echo "$config" | grep -qiE '^\[General\]'; then
-        echo "npvtunnel"; return
-    fi
-    echo "inconnu"
+    read -p "Cible (IP/Domaine) : " target
+    [ -z "$target" ] && return
+    echo -e "${CYAN}[*] Scan de $target...${RESET}"
+    nmap -p 22,80,443,8080,1080 --open "$target"
+    echo -e "${CYAN}Appuyez sur Entrée pour revenir au menu...${RESET}"
+    read
 }
 
-compatible_apps() {
-    local type="$1"
-    case "$type" in
-        vmess|vless|trojan|ss|ssr|v2ray-*)
-            echo -e "${MAGENTA}[i] Protocole détecté : $type${RESET}"
-            echo -e "${GREEN}Applications compatibles :${RESET}"
-            echo "  - v2rayNG"
-            echo "  - NapsternetV"
-            echo "  - HTTPCustom (supporte VMess, VLESS, Trojan, SS)"
-            echo "  - DarkTunnel"
-            echo "  - NpvTunnel"
-            echo "  - NetMod"
-            ;;
-        httpcustom)
-            echo -e "${MAGENTA}[i] Configuration HTTPCustom détectée${RESET}"
-            echo -e "${GREEN}Applications compatibles :${RESET}"
-            echo "  - HTTPCustom"
-            echo "  - NpvTunnel (conversion possible)"
-            ;;
-        npvtunnel)
-            echo -e "${MAGENTA}[i] Configuration NpvTunnel détectée${RESET}"
-            echo -e "${GREEN}Applications compatibles :${RESET}"
-            echo "  - NpvTunnel"
-            echo "  - HTTPCustom (conversion possible)"
-            ;;
-        inconnu|*)
-            echo -e "${YELLOW}[!] Type de configuration non reconnu.${RESET}"
-            ;;
-    esac
+# ========== OPTION 3 : GÉNÉRER UN PAYLOAD V2RAY ==========
+gen_payload() {
+    echo -e "${CYAN}[*] Génération d'un payload V2Ray...${RESET}"
+    read -p "UUID (laisse vide pour aléatoire) : " uid
+    [ -z "$uid" ] && uid=$(uuidgen 2>/dev/null || echo "ba7e9c5c-$(openssl rand -hex 4)-$(openssl rand -hex 2)-$(openssl rand -hex 2)-$(openssl rand -hex 6)")
+    read -p "Host : " host
+    read -p "Port (443) : " port
+    port=${port:-443}
+    read -p "Type (vmess/vless) : " vtype
+    vtype=${vtype:-vmess}
+    cat <<EOFP
+${GREEN}===== PAYLOAD V2RAY =====${RESET}
+{
+  "outbounds": [{
+    "protocol": "$vtype",
+    "settings": {
+      "vnext": [{
+        "address": "$host",
+        "port": $port,
+        "users": [{"id": "$uid", "alterId": 0}]
+      }]
+    },
+    "streamSettings": {"network": "tcp"}
+  }]
+}
+${GREEN}========================${RESET}
+EOFP
+    log "Payload généré pour $host:$port"
+    echo -e "${CYAN}Appuyez sur Entrée pour revenir au menu...${RESET}"
+    read
 }
 
+# ========== OPTION 4 : MODIFIER UN HOST DANS UNE CONFIG V2RAY ==========
 mod_host() {
     echo -e "${CYAN}[*] Analyse et modification de configuration...${RESET}"
     echo "Colle ta configuration (lien ou JSON), puis tape FIN sur une nouvelle ligne :"
@@ -146,6 +151,7 @@ mod_host() {
         rm -f "$tmpfile"; return 1
     fi
     config=$(cat "$tmpfile")
+    # Détection simple du type
     vpn_type=$(detect_vpn "$config")
     compatible_apps "$vpn_type"
 
@@ -164,6 +170,7 @@ mod_host() {
         [ -z "$newhost" ] && { rm -f "$tmpfile"; return; }
 
         final_result=""; modified=0
+
         case "$vpn_type" in
             vmess) 
                 if echo "$config" | grep -qi '^vmess://'; then
@@ -267,45 +274,88 @@ mod_host() {
     rm -f "$tmpfile"
 }
 
-save_config() {
-    echo -e "${CYAN}Sauvegarde de configuration...${RESET}"
-    read -p "Nom du fichier (ou 'menu' pour annuler) : " fname
-    [ "$fname" = "menu" ] || [ "$fname" = "MENU" ] && return
-    [ -z "$fname" ] && fname="backup_$(date +%s).json"
-    echo "Colle la configuration, puis tape FIN sur une nouvelle ligne :"
-    tmpfile="$CONFIG_DIR/$fname"
-    > "$tmpfile"
-    while IFS= read -r line; do
-        [ "$line" = "FIN" ] && break
-        [ "$line" = "menu" ] || [ "$line" = "MENU" ] && { rm -f "$tmpfile"; echo -e "${YELLOW}[i] Retour au menu.${RESET}"; return; }
-        echo "$line" >> "$tmpfile"
-    done
-    if [ -s "$tmpfile" ]; then
-        if jq empty "$tmpfile" &>/dev/null || [ -n "$(cat "$tmpfile")" ]; then
-            echo -e "${GREEN}[✔] Config sauvegardée.${RESET}"
-            log "Config sauvegardée : $fname"
-        else
-            echo -e "${RED}[!] Fichier vide.${RESET}"; rm -f "$tmpfile"
-        fi
-    else
-        echo -e "${RED}[!] Annulé.${RESET}"
+# ========== OPTION 5 : EMPOISONNER LES DNS ==========
+dns_poison() {
+    echo -e "${CYAN}[*] Changement des DNS...${RESET}"
+    echo "1. Cloudflare (1.1.1.1)"
+    echo "2. Google (8.8.8.8)"
+    echo "3. Quad9 (9.9.9.9)"
+    echo "4. Personnalisé"
+    read -p "Choix : " dns
+    case $dns in
+        1) ns1="1.1.1.1"; ns2="1.0.0.1" ;;
+        2) ns1="8.8.8.8"; ns2="8.8.4.4" ;;
+        3) ns1="9.9.9.9"; ns2="149.112.112.112" ;;
+        4) read -p "DNS1 : " ns1; read -p "DNS2 : " ns2 ;;
+        *) return ;;
+    esac
+    echo -e "nameserver $ns1\nnameserver $ns2" > /data/data/com.termux/files/usr/etc/resolv.conf 2>/dev/null
+    echo -e "${GREEN}[✔] DNS changés.${RESET}"
+    log "DNS -> $ns1, $ns2"
+    echo -e "${CYAN}Appuyez sur Entrée pour revenir au menu...${RESET}"
+    read
+}
+
+# ========== FONCTIONS DE DÉTECTION (pour l'option 4) ==========
+detect_vpn() {
+    local config="$1"
+    if echo "$config" | grep -qiE '^(vmess|vless|trojan|ss|ssr)://'; then
+        proto=$(echo "$config" | grep -oEi '^(vmess|vless|trojan|ss|ssr)' | tr '[:upper:]' '[:lower:]')
+        echo "$proto"
+        return
     fi
+    if echo "$config" | jq -e .outbounds >/dev/null 2>&1; then
+        proto=$(echo "$config" | jq -r '.outbounds[0].protocol // empty' 2>/dev/null)
+        [ -n "$proto" ] && echo "v2ray-$proto" && return
+    fi
+    if echo "$config" | grep -qiE '^mode='; then
+        echo "httpcustom"; return
+    fi
+    if echo "$config" | grep -qiE '^\[General\]'; then
+        echo "npvtunnel"; return
+    fi
+    echo "inconnu"
 }
 
-restore_config() {
-    echo -e "${CYAN}Configurations disponibles :${RESET}"
-    ls "$CONFIG_DIR"/* 2>/dev/null || { echo "Aucune."; return; }
-    read -p "Fichier à afficher (ou 'menu' pour annuler) : " fname
-    [ "$fname" = "menu" ] || [ "$fname" = "MENU" ] && return
-    [ -f "$CONFIG_DIR/$fname" ] && cat "$CONFIG_DIR/$fname" || echo -e "${RED}Introuvable.${RESET}"
+compatible_apps() {
+    local type="$1"
+    case "$type" in
+        vmess|vless|trojan|ss|ssr|v2ray-*)
+            echo -e "${MAGENTA}[i] Protocole détecté : $type${RESET}"
+            echo -e "${GREEN}Applications compatibles :${RESET}"
+            echo "  - v2rayNG"
+            echo "  - NapsternetV"
+            echo "  - HTTPCustom (supporte VMess, VLESS, Trojan, SS)"
+            echo "  - DarkTunnel"
+            echo "  - NpvTunnel"
+            echo "  - NetMod"
+            ;;
+        httpcustom)
+            echo -e "${MAGENTA}[i] Configuration HTTPCustom détectée${RESET}"
+            echo -e "${GREEN}Applications compatibles :${RESET}"
+            echo "  - HTTPCustom"
+            echo "  - NpvTunnel (conversion possible)"
+            ;;
+        npvtunnel)
+            echo -e "${MAGENTA}[i] Configuration NpvTunnel détectée${RESET}"
+            echo -e "${GREEN}Applications compatibles :${RESET}"
+            echo "  - NpvTunnel"
+            echo "  - HTTPCustom (conversion possible)"
+            ;;
+        inconnu|*)
+            echo -e "${YELLOW}[!] Type de configuration non reconnu.${RESET}"
+            ;;
+    esac
 }
 
+# ========== OPTION 6 : TEST DE VITESSE ==========
 speed_test() {
     command -v speedtest-cli &>/dev/null && speedtest-cli || echo -e "${RED}Installe speedtest-cli.${RESET}"
     echo -e "${CYAN}Appuyez sur Entrée pour revenir au menu...${RESET}"
     read
 }
 
+# ========== OPTION 7 : VOIR LES LOGS ==========
 show_logs() {
     if [ -f "$LOG" ]; then
         cat "$LOG"
@@ -316,6 +366,7 @@ show_logs() {
     read
 }
 
+# ========== OPTION 8 : METTRE À JOUR LE SCRIPT ==========
 update_script() {
     echo -e "${CYAN}[*] Vérification de mise à jour...${RESET}"
     echo "Version actuelle : $VERSION"
@@ -347,27 +398,30 @@ update_script() {
     read
 }
 
+# ========== MENU PRINCIPAL (9 OPTIONS) ==========
 menu() {
     while true; do
-        echo -e "\n${BOLD}${YELLOW}====== MENU MAGIC-VPN ======${RESET}"
-        echo "1. Stabiliser connexion VPN"
-        echo "2. Analyser & Modifier une config (host/Sni)"
-        echo "3. Sauvegarder config"
-        echo "4. Restaurer config"
-        echo "5. Test de vitesse"
-        echo "6. Voir logs"
-        echo "7. Mise à jour"
-        echo "8. Quitter"
-        read -p "Choix [1-8] : " c
+        echo -e "\n${BOLD}${YELLOW}~~> MAGIC-VPN : MENU PRINCIPAL <~~${RESET}"
+        echo "1. Stabiliser & optimiser (root)"
+        echo "2. Scanner des ports (nmap)"
+        echo "3. Générer un payload V2Ray"
+        echo "4. Modifier un host dans une config V2Ray"
+        echo "5. Empoisonner les DNS"
+        echo "6. Test de vitesse Internet"
+        echo "7. Voir les logs"
+        echo "8. Mettre à jour le script"
+        echo "9. Quitter"
+        read -p "Votre choix [1-9] : " c
         case $c in
-            1) optimize ;;
-            2) mod_host ;;
-            3) save_config ;;
-            4) restore_config ;;
-            5) speed_test ;;
-            6) show_logs ;;
-            7) update_script ;;
-            8)
+            1) optimize_root ;;
+            2) scan_ports ;;
+            3) gen_payload ;;
+            4) mod_host ;;
+            5) dns_poison ;;
+            6) speed_test ;;
+            7) show_logs ;;
+            8) update_script ;;
+            9)
                 echo -e "${GREEN}========================================${RESET}"
                 echo -e "${YELLOW}  Merci d'avoir utilisé MAGIC-VPN, le Dieu du Net !${RESET}"
                 echo -e "${CYAN}  Rejoins mon groupe de formation Free Net :${RESET}"
