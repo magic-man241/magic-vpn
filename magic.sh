@@ -18,7 +18,7 @@ MAGIC_DIR="$HOME/.magicvpn"
 LOG="$MAGIC_DIR/magic.log"
 mkdir -p "$MAGIC_DIR"
 
-VERSION="5.0"
+VERSION="5.1"
 UPDATE_URL="https://raw.githubusercontent.com/magic-man241/magic-vpn/main/magic.sh"
 VERSION_URL="https://raw.githubusercontent.com/magic-man241/magic-vpn/main/version"
 
