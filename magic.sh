@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 #===============================================================================
-# MAGIC-VPN 4.0.2 – by MAGIC-MAN
-# Gabon Flag Edition | Full Menu Loop | Host/SNI Changer | Copie manuelle
+# MAGIC-VPN 5.0 – by MAGIC-MAN (Le Dieu du Net)
+# Gabon Flag Edition | Full Menu Loop | Host/SNI Changer | Auto-Update
 #===============================================================================
 
 GREEN='\e[42m\e[30m'
@@ -15,10 +15,13 @@ WHITE='\e[37m'
 MAGENTA='\e[35m'
 
 MAGIC_DIR="$HOME/.magicvpn"
-VERSION="5.0"
 LOG="$MAGIC_DIR/magic.log"
 CONFIG_DIR="$MAGIC_DIR/configs"
 mkdir -p "$MAGIC_DIR" "$CONFIG_DIR"
+
+VERSION="5.0"
+UPDATE_URL="https://raw.githubusercontent.com/magic-man241/magic-vpn/main/magic.sh"
+VERSION_URL="https://raw.githubusercontent.com/magic-man241/magic-vpn/main/version"
 
 log() { echo "[$(date '+%H:%M:%S')] $1" | tee -a "$LOG"; }
 
@@ -38,7 +41,6 @@ banner() {
     printf "${WHITE}%*s${BOLD}${RED}${SUB}${RESET}\n\n" "$PAD_S" ""
 }
 
-# Authentification (boucle infinie)
 auth() {
     while true; do
         echo -ne "${YELLOW}[>] Password: ${RESET}"
@@ -122,32 +124,26 @@ compatible_apps() {
             ;;
         inconnu|*)
             echo -e "${YELLOW}[!] Type de configuration non reconnu.${RESET}"
-            echo "Assurez-vous de coller un lien V2Ray ou un JSON valide."
             ;;
     esac
 }
 
-# Fonction de modification (robuste, sans copie automatique)
 mod_host() {
     echo -e "${CYAN}[*] Analyse et modification de configuration...${RESET}"
     echo "Colle ta configuration (lien ou JSON), puis tape FIN sur une nouvelle ligne :"
     tmpfile="$MAGIC_DIR/tmp_config"
     > "$tmpfile"
     while IFS= read -r line; do
-        if [ "$line" = "FIN" ]; then
-            break
-        fi
+        if [ "$line" = "FIN" ]; then break; fi
         if [ "$line" = "menu" ] || [ "$line" = "MENU" ]; then
             echo -e "${YELLOW}[i] Retour au menu.${RESET}"
-            rm -f "$tmpfile"
-            return
+            rm -f "$tmpfile"; return
         fi
         echo "$line" >> "$tmpfile"
     done
     if [ ! -s "$tmpfile" ]; then
         echo -e "${RED}[!] Aucune entrée.${RESET}"
-        rm -f "$tmpfile"
-        return 1
+        rm -f "$tmpfile"; return 1
     fi
     config=$(cat "$tmpfile")
     vpn_type=$(detect_vpn "$config")
@@ -157,34 +153,19 @@ mod_host() {
         echo ""
         echo -e "${CYAN}Que souhaites-tu modifier ? (h = Host, s = SNI, menu = annuler)${RESET}"
         read -p "Choix : " modchoice
-        if [ "$modchoice" = "menu" ] || [ "$modchoice" = "MENU" ]; then
-            rm -f "$tmpfile"
-            return
-        fi
+        [ "$modchoice" = "menu" ] || [ "$modchoice" = "MENU" ] && { rm -f "$tmpfile"; return; }
 
         case "$modchoice" in
-            h|H)
-                read -p "Nouveau Host (ou tape 'menu' pour annuler) : " newhost
-                [ "$newhost" = "menu" ] || [ "$newhost" = "MENU" ] && { rm -f "$tmpfile"; return; }
-                [ -z "$newhost" ] && { rm -f "$tmpfile"; return; }
-                ;;
-            s|S)
-                read -p "Nouveau SNI (ou tape 'menu' pour annuler) : " newhost
-                [ "$newhost" = "menu" ] || [ "$newhost" = "MENU" ] && { rm -f "$tmpfile"; return; }
-                [ -z "$newhost" ] && { rm -f "$tmpfile"; return; }
-                ;;
-            *)
-                echo -e "${RED}[!] Choix invalide.${RESET}"
-                rm -f "$tmpfile"
-                return 1
-                ;;
+            h|H) read -p "Nouveau Host (ou 'menu' pour annuler) : " newhost ;;
+            s|S) read -p "Nouveau SNI (ou 'menu' pour annuler) : " newhost ;;
+            *) echo -e "${RED}[!] Choix invalide.${RESET}"; rm -f "$tmpfile"; return 1 ;;
         esac
+        [ "$newhost" = "menu" ] || [ "$newhost" = "MENU" ] && { rm -f "$tmpfile"; return; }
+        [ -z "$newhost" ] && { rm -f "$tmpfile"; return; }
 
-        final_result=""
-        modified=0
-
+        final_result=""; modified=0
         case "$vpn_type" in
-            vmess)
+            vmess) 
                 if echo "$config" | grep -qi '^vmess://'; then
                     base64_part=$(echo "$config" | sed 's|^vmess://||')
                     padding=$(( (4 - ${#base64_part} % 4) % 4 ))
@@ -194,8 +175,7 @@ mod_host() {
                         if [ "$modchoice" = "s" ] || [ "$modchoice" = "S" ]; then
                             newdecoded=$(echo "$decoded" | jq --arg sni "$newhost" '
                                 if .sni then .sni = $sni else . end |
-                                if .streamSettings.tlsSettings then .streamSettings.tlsSettings.serverName = $sni else . end
-                            ')
+                                if .streamSettings.tlsSettings then .streamSettings.tlsSettings.serverName = $sni else . end')
                         else
                             newdecoded=$(echo "$decoded" | jq --arg h "$newhost" '.add = $h | .host = $h')
                         fi
@@ -203,7 +183,6 @@ mod_host() {
                             newbase64=$(echo -n "$newdecoded" | base64 -w 0)
                             final_result="vmess://$newbase64"
                             modified=1
-                            log "Host/SNI VMess remplacé par $newhost"
                         fi
                     fi
                 fi
@@ -231,14 +210,11 @@ mod_host() {
                             final_result="${proto}://${prefix}@${newhost}"
                         fi
                         modified=1
-                        log "Host ${proto^^} remplacé par $newhost"
                     else
-                        # SNI
                         if echo "$config" | grep -qi '&sni=' || echo "$config" | grep -qi '?sni='; then
                             final_result=$(echo "$config" | sed -E "s/([?&]sni=)[^&]*(&?)/\1${newhost}\2/")
                             final_result=$(echo "$final_result" | sed 's/&$//')
                             modified=1
-                            log "SNI ${proto^^} remplacé par $newhost"
                         else
                             if echo "$config" | grep -q '#'; then
                                 fragment=$(echo "$config" | sed -E 's/.*#/#/')
@@ -248,39 +224,30 @@ mod_host() {
                                 final_result="${config}&sni=${newhost}"
                             fi
                             modified=1
-                            log "SNI ajouté : $newhost"
                         fi
                     fi
                 fi
                 ;;
             ss|ssr)
                 echo -e "${YELLOW}[i] Les liens SS/SSR ne sont pas modifiés automatiquement.${RESET}"
-                final_result="$config"
-                modified=0
+                final_result="$config"; modified=0
                 ;;
             v2ray-*)
                 if echo "$config" | jq empty &>/dev/null; then
                     if [ "$modchoice" = "s" ] || [ "$modchoice" = "S" ]; then
                         newconf=$(jq --arg sni "$newhost" '
                             (.outbounds[]? | select(.streamSettings.tlsSettings) | .streamSettings.tlsSettings.serverName) = $sni |
-                            (.outbounds[]? | if .settings.vnext then .settings.vnext[].users[].sni = $sni else . end)
-                        ' <<< "$config" 2>/dev/null)
+                            (.outbounds[]? | if .settings.vnext then .settings.vnext[].users[].sni = $sni else . end)' <<< "$config" 2>/dev/null)
                     else
                         newconf=$(jq --arg h "$newhost" '
                             (.outbounds[]? | select(.settings.vnext) | .settings.vnext[].address) = $h |
-                            (.outbounds[]? | select(.settings.servers) | .settings.servers[].address) = $h
-                        ' <<< "$config" 2>/dev/null)
+                            (.outbounds[]? | select(.settings.servers) | .settings.servers[].address) = $h' <<< "$config" 2>/dev/null)
                     fi
-                    if [ -n "$newconf" ]; then
-                        final_result="$newconf"
-                        modified=1
-                        log "JSON modifié avec $newhost"
-                    fi
+                    [ -n "$newconf" ] && { final_result="$newconf"; modified=1; }
                 fi
                 ;;
         esac
 
-        # Affichage du résultat
         if [ $modified -eq 1 ]; then
             echo -e "${GREEN}[✔] Configuration modifiée :${RESET}"
             echo "$final_result"
@@ -288,41 +255,29 @@ mod_host() {
             echo -e "${YELLOW}[i] Le lien SS/SSR n'a pas été modifié. Lien original :${RESET}"
             echo "$final_result"
         else
-            echo -e "${RED}[!] La modification a échoué ou aucun changement n'a été appliqué.${RESET}"
-            rm -f "$tmpfile"
-            echo -e "${CYAN}Appuyez sur Entrée pour revenir au menu...${RESET}"
-            read
-            return
+            echo -e "${RED}[!] La modification a échoué.${RESET}"
         fi
-
         echo ""
-        echo -e "${CYAN}👉 Pour copier, appuie longuement sur le lien ci-dessus puis « Copier ».${RESET}"
+        echo -e "${CYAN}👉 Pour copier, appuie longuement sur le lien puis « Copier ».${RESET}"
         echo -e "${CYAN}Appuyez sur Entrée pour revenir au menu...${RESET}"
         read
     else
-        echo -e "${YELLOW}[i] La modification du host/SNI n'est possible que pour V2Ray (VMess/VLESS/Trojan).${RESET}"
+        echo -e "${YELLOW}[i] Modification impossible pour ce type de configuration.${RESET}"
     fi
-
     rm -f "$tmpfile"
 }
 
 save_config() {
     echo -e "${CYAN}Sauvegarde de configuration...${RESET}"
     read -p "Nom du fichier (ou 'menu' pour annuler) : " fname
-    if [ "$fname" = "menu" ] || [ "$fname" = "MENU" ]; then
-        return
-    fi
+    [ "$fname" = "menu" ] || [ "$fname" = "MENU" ] && return
     [ -z "$fname" ] && fname="backup_$(date +%s).json"
     echo "Colle la configuration, puis tape FIN sur une nouvelle ligne :"
     tmpfile="$CONFIG_DIR/$fname"
     > "$tmpfile"
     while IFS= read -r line; do
-        if [ "$line" = "FIN" ]; then break; fi
-        if [ "$line" = "menu" ] || [ "$line" = "MENU" ]; then
-            rm -f "$tmpfile"
-            echo -e "${YELLOW}[i] Retour au menu.${RESET}"
-            return
-        fi
+        [ "$line" = "FIN" ] && break
+        [ "$line" = "menu" ] || [ "$line" = "MENU" ] && { rm -f "$tmpfile"; echo -e "${YELLOW}[i] Retour au menu.${RESET}"; return; }
         echo "$line" >> "$tmpfile"
     done
     if [ -s "$tmpfile" ]; then
@@ -330,8 +285,7 @@ save_config() {
             echo -e "${GREEN}[✔] Config sauvegardée.${RESET}"
             log "Config sauvegardée : $fname"
         else
-            echo -e "${RED}[!] Fichier vide.${RESET}"
-            rm -f "$tmpfile"
+            echo -e "${RED}[!] Fichier vide.${RESET}"; rm -f "$tmpfile"
         fi
     else
         echo -e "${RED}[!] Annulé.${RESET}"
@@ -342,9 +296,7 @@ restore_config() {
     echo -e "${CYAN}Configurations disponibles :${RESET}"
     ls "$CONFIG_DIR"/* 2>/dev/null || { echo "Aucune."; return; }
     read -p "Fichier à afficher (ou 'menu' pour annuler) : " fname
-    if [ "$fname" = "menu" ] || [ "$fname" = "MENU" ]; then
-        return
-    fi
+    [ "$fname" = "menu" ] || [ "$fname" = "MENU" ] && return
     [ -f "$CONFIG_DIR/$fname" ] && cat "$CONFIG_DIR/$fname" || echo -e "${RED}Introuvable.${RESET}"
 }
 
@@ -364,6 +316,37 @@ show_logs() {
     read
 }
 
+update_script() {
+    echo -e "${CYAN}[*] Vérification de mise à jour...${RESET}"
+    echo "Version actuelle : $VERSION"
+    remote_version=$(curl -s "$VERSION_URL" 2>/dev/null)
+    if [ -z "$remote_version" ]; then
+        echo -e "${RED}[!] Impossible de vérifier la version (pas de connexion ?).${RESET}"
+    elif [ "$remote_version" = "$VERSION" ]; then
+        echo -e "${GREEN}[✔] Vous utilisez déjà la dernière version ($VERSION).${RESET}"
+    else
+        echo -e "${YELLOW}Une nouvelle version ($remote_version) est disponible !${RESET}"
+        read -p "Voulez-vous mettre à jour ? (o/n) : " do_update
+        if [ "$do_update" = "o" ] || [ "$do_update" = "O" ]; then
+            echo "Téléchargement de la nouvelle version..."
+            curl -sL "$UPDATE_URL" -o /tmp/magic_new.sh
+            if bash -n /tmp/magic_new.sh &>/dev/null; then
+                cp /tmp/magic_new.sh "$PREFIX/bin/magic"
+                chmod +x "$PREFIX/bin/magic"
+                echo -e "${GREEN}[✔] Mise à jour terminée. Relance 'magic'.${RESET}"
+                log "Script mis à jour vers $remote_version"
+            else
+                echo -e "${RED}[!] Fichier téléchargé invalide.${RESET}"
+            fi
+            rm -f /tmp/magic_new.sh
+        else
+            echo -e "${YELLOW}[i] Mise à jour annulée.${RESET}"
+        fi
+    fi
+    echo -e "${CYAN}Appuyez sur Entrée pour revenir au menu...${RESET}"
+    read
+}
+
 menu() {
     while true; do
         echo -e "\n${BOLD}${YELLOW}====== MENU MAGIC-VPN ======${RESET}"
@@ -377,23 +360,24 @@ menu() {
         echo "8. Quitter"
         read -p "Choix [1-8] : " c
         case $c in
-            1) optimize;;
-            2) mod_host;;
-            3) save_config;;
-            4) restore_config;;
-            5) speed_test;;
-            6) show_logs;;
-            7) update_script;;
-            8) echo -e "${GREEN}========================================${RESET}" ;
-               echo -e "${YELLOW}  Merci d'avoir utilisé MAGIC-VPN, le Dieu du Net !${RESET}" ;
-               echo -e "${CYAN}  Rejoins mon groupe de formation Free Net :${RESET}" ;
-               echo -e "${MAGENTA}  https://chat.whatsapp.com/Dfov4YFtEqe7eILe5ctEQd${RESET}" ;
-               echo -e "${WHITE}  Contacte-moi sur WhatsApp : +24160141633${RESET}" ;
-               echo -e "${GREEN}========================================${RESET}" ;
-               echo -e "${BOLD}${RED}  N'oublie pas de me féliciter et de partager !${RESET}" ;
-               echo "" ;
-               exit 0;;
-            *) echo -e "${RED}[!] Invalide.${RESET}";;
+            1) optimize ;;
+            2) mod_host ;;
+            3) save_config ;;
+            4) restore_config ;;
+            5) speed_test ;;
+            6) show_logs ;;
+            7) update_script ;;
+            8)
+                echo -e "${GREEN}========================================${RESET}"
+                echo -e "${YELLOW}  Merci d'avoir utilisé MAGIC-VPN, le Dieu du Net !${RESET}"
+                echo -e "${CYAN}  Rejoins mon groupe de formation Free Net :${RESET}"
+                echo -e "${MAGENTA}  https://chat.whatsapp.com/Dfov4YFtEqe7eILe5ctEQd${RESET}"
+                echo -e "${WHITE}  Contacte-moi sur WhatsApp : +24160141633${RESET}"
+                echo -e "${GREEN}========================================${RESET}"
+                echo -e "${BOLD}${RED}  N'oublie pas de me féliciter et de partager !${RESET}\n"
+                exit 0
+                ;;
+            *) echo -e "${RED}[!] Invalide.${RESET}" ;;
         esac
     done
 }
